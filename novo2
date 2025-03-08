@@ -1,0 +1,278 @@
+const qrcode = require('qrcode-terminal');
+const { Client } = require('whatsapp-web.js');
+const client = new Client();
+
+// Gerar QR code para autenticação do WhatsApp
+client.on('qr', qr => {
+    qrcode.generate(qr, { small: true });
+});
+
+// Quando a conexão estiver pronta
+client.on('ready', () => {
+    console.log('Tudo certo! WhatsApp conectado.');
+});
+
+// Inicializa o cliente
+client.initialize();
+
+// Função de delay para simular digitação
+const delay = ms => new Promise(res => setTimeout(res, ms));
+
+// Função para aguardar respostas
+async function aguardarResposta(chat, user) {
+    return new Promise(resolve => {
+        client.on('message', async (msg) => {
+            if (msg.from === user) {
+                resolve(msg.body);
+            }
+        });
+    });
+}
+
+// Função para validar o formato do CEP (ex: 11500-550)
+function validarCEP(cep) {
+    const regex = /^[0-9]{5}-[0-9]{3}$/;
+    return regex.test(cep); // Retorna true se o CEP for válido, senão retorna false
+}
+
+// Função para validar resposta de "Sim" ou "Não"
+function validarSimOuNao(resposta) {
+    return /^(sim|não)$/i.test(resposta);
+}
+
+// Função para validar se a resposta está dentro das opções
+function validarOpcoesMenu(resposta) {
+    return /^[A-E]([1-5])$/.test(resposta); // Aceita apenas A1, B2, C3, D4, E5
+}
+
+// Fluxo de mensagens
+client.on('message', async msg => {
+    const chat = await msg.getChat();
+    const user = msg.from;
+    let emMenu = true;  // Variável de controle para saber se estamos no menu
+    let emCadastro = false;  // Variável para controle do fluxo de cadastro
+
+    // Função de iniciar o menu
+    async function enviarMenu() {
+        await delay(3000);
+        await chat.sendStateTyping();
+        await delay(3000);
+        await client.sendMessage(user, `Olá! Aqui é o Davi, sou consultor de novos imóveis do Quinto Andar. Como posso ajudar? Digite o número de uma das opções abaixo:\n\nA1 - *Quero anunciar meu imóvel* 🏡\nB2 - *Saber mais sobre o Quinto Andar* 📚\nC3 - *Informações sobre valores* 💰\nD4 - *Indicar um proprietário* 🧑‍💼\nE5 - *Falar com um corretor* 🧑‍💼\n\nOu digite *voltar* para voltar ao menu principal.`);
+    }
+
+    // Inicia o menu inicial com saudação personalizada
+    if (msg.body.match(/(oi|olá|ola|oee|bom dia|boa tarde|boa noite|tenho|sim|não|quem|ok)/i) && user.endsWith('@c.us')) {
+        await delay(3000);
+        const contact = await msg.getContact();
+        const name = contact.pushname || "usuário"; // Nome do usuário ou "usuário" se não encontrado
+        await chat.sendStateTyping();
+        await delay(3000);
+        await client.sendMessage(user, `Olá ${name.split(" ")[0]}! Aqui é o Davi, sou consultor de novos imóveis do Quinto Andar. Como posso ajudar? Digite o número de uma das opções abaixo:\n\nA1 - *Quero anunciar meu imóvel* 🏡\nB2 - *Saber mais sobre o Quinto Andar* 📚\nC3 - *Informações sobre valores* 💰\nD4 - *Indicar um proprietário* 🧑‍💼\nE5 - *Falar com um corretor* 🧑‍💼\n\nOu digite *voltar* para voltar ao menu principal.`);
+    }
+
+    // Se o usuário digitar "voltar" a qualquer momento, envia o menu novamente
+    if (msg.body.toLowerCase() === 'voltar' && !emCadastro) {
+        emMenu = true;
+        await enviarMenu();
+    }
+
+    // Se o usuário escolher uma das opções do menu (A1 - E5)
+    if (emMenu && validarOpcoesMenu(msg.body)) {
+        // Se a opção for A1 (Quero anunciar meu imóvel), entra no fluxo de cadastro
+        if (msg.body === 'A1') {
+            emMenu = false;
+            emCadastro = true; // Inicia o cadastro
+            await delay(3000);
+            await chat.sendStateTyping();
+            await delay(3000);
+            await client.sendMessage(user, 'Ótima escolha! 🏡\nVou precisar de algumas informações sobre o imóvel. \n\n*Informe somente o solicitado.*');
+
+            // Pergunta o CEP do imóvel
+            let cep;
+            do {
+                await delay(3000);
+                await chat.sendStateTyping();
+                await delay(3000);
+                await client.sendMessage(user, 'Qual o CEP do imóvel? 📍');
+                cep = await aguardarResposta(chat, user); // Aguarda resposta do usuário
+                if (!validarCEP(cep)) {
+                    await client.sendMessage(user, 'CEP inválido! 😞 Por favor, insira o CEP no formato correto (ex: 11500-550).');
+                }
+            } while (!validarCEP(cep)); // Continua perguntando até o CEP ser válido
+
+            // Pergunta o endereço, número e complemento
+            const endereco = await pedirInformacao(user, 'Qual o endereço do imóvel? 🏠');
+            const numero = await pedirInformacao(user, 'Qual o número do imóvel? 🏠');
+            const complemento = await pedirInformacao(user, 'Qual o complemento do imóvel? (Ex: apto, bloco, etc) 🏢');
+            const andar = await pedirInformacao(user, 'O imóvel possui andar específico? (Ex: andar, cobertura, etc) 🏢');
+            const tipoAnuncio = await pedirInformacao(user, 'Qual o tipo de anúncio você gostaria de fazer? (Aluguel, Venda, Ambos) 💼');
+            const tipoImovel = await pedirInformacao(user, 'Qual o tipo de imóvel? (Ex: Apartamento, Kitnet, Casa, etc.) 🏡');
+            const areaImovel = await pedirInformacao(user, 'Qual a área do imóvel em metros quadrados? 📐 (Caso não saiba, coloque um valor aproximado)');
+            const vagasGaragem = await pedirInformacao(user, 'Quantas vagas de garagem o imóvel possui? 🚗');
+            const banheiros = await pedirInformacao(user, 'Quantos banheiros o imóvel possui? 🚿');
+            const quartos = await pedirInformacao(user, 'Quantos quartos o imóvel possui? 🛏️');
+            const suites = await pedirInformacao(user, 'Quantos desses quartos são suítes? 🛁');
+            const itensNoImovel = await pedirInformacao(user, 'Imóvel com ou sem mobília? 🛏️');
+            const aceitaPet = await pedirInformacao(user, 'Inquilinos podem ter animais de estimação? (Sim/Não) 🐾');
+            const descricaoImovel = await pedirInformacao(user, 'Faça uma breve descrição do imóvel: (Compartilhe com os interessados as características únicas do imóvel.) ✨');
+            const horarioPort = await pedirInformacao(user, 'Qual o horário da portaria? (24h/Diurna/Noturna/Sem portaria) ⏰');
+            const tipoEntrada = await pedirInformacao(user, 'Qual o tipo de entrada no imóvel? (Chaves/Senha/Biometria) 🔑');
+            const infoEntrada = await pedirInformacao(user, 'Informações adicionais de entrada. (Informar se a chave ficará na portaria ou se ficará em outra localização - *Chaves na portaria aluga mais rápido*) 🗝️');
+            const condominio = await pedirInformacao(user, 'Valor do condomínio mensal 💵');
+            const iptuValor = await pedirInformacao(user, 'O imóvel está sujeito ao pagamento de IPTU? (Se sim, informar o valor ANUAL) 💰');
+            const aluguelVenda = await pedirInformacao(user, 'Informar valor do Aluguel / Venda sem contar com o condominio e IPTU? (Se for ambos, informar na mesma mensagem) 💲');
+            const nomeProprietario = await pedirInformacao(user, 'Por favor, informe o nome do proprietário do imóvel. 🏡');
+            const celularProprietario = await pedirInformacao(user, 'Por favor, informe o celular do proprietário do imóvel com DDD. 📞');
+
+            const dadosImovel = {
+                cep,
+                endereco,
+                numero,
+                complemento,
+                andar,
+                tipoAnuncio,
+                tipoImovel,
+                areaImovel,
+                vagasGaragem,
+                banheiros,
+                quartos,
+                suites,
+                itensNoImovel,
+                aceitaPet,
+                descricaoImovel,
+                horarioPort,
+                tipoEntrada,
+                infoEntrada,
+                condominio,
+                iptuValor,
+                aluguelVenda,
+                nomeProprietario,
+                celularProprietario,
+            };
+
+            await delay(3000);
+            await chat.sendStateTyping();
+            await delay(3000);
+
+            // Exibe o checklist de dados
+            let confirmacao = 'Aqui estão as informações que você forneceu:\n\n';
+            for (let key in dadosImovel) {
+                confirmacao += `*${key}:* ${dadosImovel[key]}\n`;
+            }
+
+            confirmacao += `\nPor favor, confirme se todas as informações estão corretas. Digite *sim* para confirmar ou *não* para corrigir algum dado.\n\nSe precisar corrigir algum dado, basta digitar o campo que deseja alterar (ex: "CEP", "endereço", "número", etc).`;
+
+            await client.sendMessage(user, confirmacao);
+
+            // Aguardar confirmação ou solicitação de correção
+            const resposta = await aguardarResposta(chat, user);
+
+            if (resposta.toLowerCase() === 'sim') {
+                // Confirmou, finaliza o cadastro
+                await finalizarCadastro();
+            } else if (resposta.toLowerCase() === 'não') {
+                // O usuário deseja corrigir algum dado
+                await corrigirDado();
+            } else {
+                // Caso a resposta não seja sim nem não, pergunta novamente
+                await client.sendMessage(user, 'Por favor, responda *sim* para confirmar ou *não* para corrigir.');
+            }
+
+            // Função para finalizar o cadastro
+            async function finalizarCadastro() {
+                await delay(3000);
+                await chat.sendStateTyping();
+                await delay(3000);
+                await client.sendMessage(user, 'Obrigado pelas informações! \nQuando for concluído o pré-cadastro, você receberá uma mensagem pelo WhatsApp para confirmação do cadastro e será feito o agendamento da sessão de fotos com o nosso fotógrafo. \n\nNão é necessário estar presente durante a sessão, basta garantir que o acesso ao imóvel esteja disponível para a realização das fotos e vídeos. 📸😊');
+            }
+
+            // Função para corrigir dados
+            async function corrigirDado() {
+                await client.sendMessage(user, 'Digite o campo que você deseja corrigir (ex: "CEP", "endereço", etc):');
+                const campoParaCorrigir = await aguardarResposta(chat, user);
+
+                if (dadosImovel[campoParaCorrigir]) {
+                    // Perguntar novamente a informação para corrigir
+                    await client.sendMessage(user, `Vamos corrigir o(a) ${campoParaCorrigir}. Por favor, forneça o novo valor:`);
+                    const novaInformacao = await aguardarResposta(chat, user);
+                    dadosImovel[campoParaCorrigir] = novaInformacao;
+
+                    // Após a correção, exibe novamente o checklist
+                    await client.sendMessage(user, `Informação corrigida! Aqui está o checklist atualizado:\n\n`);
+                    let confirmacaoCorrigida = '';
+                    for (let key in dadosImovel) {
+                        confirmacaoCorrigida += `*${key}:* ${dadosImovel[key]}\n`;
+                    }
+                    await client.sendMessage(user, confirmacaoCorrigida);
+
+                    await client.sendMessage(user, 'Agora, por favor, confirme novamente se tudo está correto: *sim* ou *não*');
+                    const respostaConfirmacao = await aguardarResposta(chat, user);
+
+                    if (respostaConfirmacao.toLowerCase() === 'sim') {
+                        await finalizarCadastro();
+                    } else {
+                        await corrigirDado();
+                    }
+                } else {
+                    await client.sendMessage(user, 'Campo não encontrado. Por favor, digite corretamente o nome do campo que deseja corrigir.');
+                    await corrigirDado();
+                }
+            }
+
+            // Função para pedir uma informação ao usuário
+            async function pedirInformacao(user, pergunta) {
+                await delay(3000);
+                await chat.sendStateTyping();
+                await delay(3000);
+                await client.sendMessage(user, pergunta);
+                return await aguardarResposta(chat, user);
+            }
+        }
+
+        // Se a opção for B2 - Saber mais sobre o Quinto Andar
+        else if (msg.body === 'B2') {
+            emMenu = false;
+            await delay(3000);
+            await chat.sendStateTyping();
+            await delay(3000);
+            await client.sendMessage(user, '📚 *Saber mais sobre o Quinto Andar*\n\nO Quinto Andar é a maior plataforma de moradia do Brasil 🇧🇷, oferecendo uma experiência simples e transparente para quem busca um lugar para morar 🏡 ou deseja alugar ou vender seu imóvel 💼.\n\nA empresa administra exclusivamente imóveis residenciais 🏠 e ainda não opera com imóveis comerciais 🏢.\n\nAtualmente, o Quinto Andar está presente em 75 cidades brasileiras 🌎, com mais de R$ 155 bilhões em ativos 💰 e mais de 265 mil contratos sob gestão 📑.\n\nA cada mês, cerca de 12 mil novos contratos de aluguel são fechados 📝 por meio de sua plataforma, o que equivale a um novo contrato a cada 4 minutos ⏱️.\n\nAlém disso, mais de 14 mil novos imóveis são anunciados mensalmente 🏠📈. Para proporcionar uma experiência inesquecível para quem precisa de um lar ou anuncia com a empresa, o Quinto Andar aposta em design, segurança e tecnologia de ponta 💻🔒.\n\nO envio da documentação é totalmente digital 📲, e a análise de crédito é feita rapidamente 🚀, tornando o processo de locação mais ágil e eficiente ⚡. Além disso, o Quinto Andar oferece produtos financeiros 💳, como a garantia locatícia, para viabilizar a etapa financeira da conquista de um novo lar 🏡, além de oferecer mais agilidade para imobiliárias e corretores focarem no que realmente importa: fazer novos negócios 📊💼.');
+        }
+
+        // Se a opção for C3 - Informações sobre valores
+        else if (msg.body === 'C3') {
+            emMenu = false;
+            await delay(3000);
+            await chat.sendStateTyping();
+            await delay(3000);
+            await client.sendMessage(user, '📚 *Informações sobre valores*\n\nSaiba mais em:\n\nhttps://help.quintoandar.com.br/hc/pt-br/articles/115000643292-O-que-%C3%A9-a-taxa-de-corretagem-QuintoAndar-E-a-taxa-de-administra%C3%A7%C3%A3o-QuintoAndar .');
+        }
+
+        // Se a opção for D4 - Indicar um proprietário
+        else if (msg.body === 'D4') {
+            emMenu = false;
+            await delay(3000);
+            await chat.sendStateTyping();
+            await delay(3000);
+            await client.sendMessage(user, '📚 *Indicar um proprietário* 🧑‍💼\n\n📋 Se você conhece algum proprietário de imóvel que gostaria de anunciar no Quinto Andar, basta nos enviar os dados dele aqui! \nNós entraremos em contato com ele.\n\nInforme o nome e telefone do proprietário do imóvel. 📞\n\n🙏 Agradecemos a indicação!.');
+        }
+
+        // Se a opção for E5 - Falar com um corretor
+        else if (msg.body === 'E5') {
+            emMenu = false;
+            await delay(3000);
+            await chat.sendStateTyping();
+            await delay(3000);
+            await client.sendMessage(user, '📞 *Falar com um corretor* 🧑‍💼\n\nEntre em contato pelo WhatsApp: 📱 (13) 98225 1000.\n\nEstamos à disposição para ajudar você! 💬');
+        }
+    }
+});
+
+// Função para reiniciar o menu quando não estiver em um cadastro
+async function enviarMenuNovamente(chat, user) {
+    if (!emCadastro) {
+        await delay(3000);
+        await chat.sendStateTyping();
+        await delay(3000);
+        await client.sendMessage(user, 'Escolha uma das opções novamente:\nA1 - Quero anunciar meu imóvel 🏡\nB2 - Saber mais sobre o Quinto Andar 📚\nC3 - Informações sobre valores 💰\nD4 - Indicar um proprietário 🧑‍💼\nE5 - Falar com um corretor 🧑‍💼');
+    }
+}
